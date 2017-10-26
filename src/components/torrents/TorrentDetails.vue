@@ -22,18 +22,19 @@
 </template>
 
 <script>
-  import WebTorrent from 'webtorrent';
-
   import AppDownloadLink from './DownloadLink.vue'
 
-  var client = new WebTorrent()
+  import WebTorrent from 'webtorrent';
+  import StreamSaver from 'streamsaver';
+  var client = new WebTorrent();
 
   export default {
     data: function () {
       return {
         torrent: {},
         links: [],
-        progress: 0
+        progress: 0,
+        streamSemaphore: -1
       }
     },
     props: ['magnetUri'],
@@ -41,26 +42,44 @@
       'app-download-link': AppDownloadLink
     },
     methods: {
-      updateProgress: function() {
+      updateProgress: function () {
         this.progress = Math.round((this.torrent.received / this.torrent.length) * 100)
         if (this.progress != 100) {
-          setTimeout(this.updateProgress, 500)
+          setTimeout(this.updateProgress, 500);
+        }
+      },
+      streamFile: function () {
+        var file = this.torrent.files[this.streamSemaphore];
+        var fileStream = StreamSaver.createWriteStream(file.name, file.size);
+        var writer = fileStream.getWriter();
+        var readStream = file.createReadStream();
+        var vm = this;
+
+        readStream.on('data', function (data) {
+          writer.write(data);
+        })
+
+        readStream.on('end', function () {
+          vm.streamSemaphore = -1
+          writer.close();
+        })
+      }
+    },
+    watch: {
+      streamSemaphore: function(currentValue, oldValue) {
+        if(currentValue == -1 && oldValue < (this.torrent.files.length - 1)) {
+          this.streamSemaphore = oldValue + 1;
+          this.streamFile();
         }
       }
     },
     created() {
       var vm = this
-      client.add(this.magnetUri, {announce: 'ws://127.0.0.1:8800/announce', path: '/downloads/'}, function (torrent) {
-        vm.torrent = torrent
-
-        torrent.files.forEach(function (file) {
-          file.getBlobURL(function (err, url) {
-            if (err) throw err
-            vm.links.push({blobUrl: url, fileName: file.name})
-          });
-        })
-
-        setTimeout(vm.updateProgress, 500)
+      client.add(this.magnetUri, {announce: ['ws://127.0.0.1:8800/announce'], path: '/Downloads/'}, function (torrent) {
+        vm.torrent = torrent;
+        vm.streamSemaphore = 0;
+        vm.streamFile();
+        setTimeout(vm.updateProgress, 500);
       })
     }
   }
